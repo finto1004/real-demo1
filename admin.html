@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>업무보고 관리자</title>
+  <link rel="stylesheet" href="/admin.css">
+  <script src="/admin.js" defer></script>
+</head>
+<body>
+  <main id="login-view" class="login-shell">
+    <section class="login-card" aria-labelledby="login-title">
+      <div class="logo" aria-hidden="true">◈</div>
+      <p class="eyebrow">WORK REPORT</p>
+      <h1 id="login-title">관리자 로그인</h1>
+      <p class="muted">업무보고를 조회하고 상담사 계정을 관리하세요.</p>
+      <form id="login-form">
+        <label>관리자 아이디<input name="username" autocomplete="username" required maxlength="48"></label>
+        <label>비밀번호<input name="password" type="password" autocomplete="current-password" required minlength="5" maxlength="12"><small>5~12자</small></label>
+        <div class="check-options">
+          <label><input type="checkbox" name="saveUsername"> 아이디 저장</label>
+          <label><input type="checkbox" name="remember"> 로그인 유지</label>
+        </div>
+        <button class="primary">로그인</button>
+      </form>
+      <p id="login-status" class="status" role="status"></p>
+      <a href="/">← 상담사 로그인</a>
+    </section>
+  </main>
+  <div class="app" id="admin-view" hidden>
+    <aside class="sidebar">
+      <div class="brand"><span class="logo" aria-hidden="true">◈</span><div><strong>업무보고</strong><small>관리자 콘솔</small></div></div>
+      <nav aria-label="관리자 메뉴">
+        <button type="button" data-view="reports" aria-current="page"><span aria-hidden="true">▤</span> 통합 보고서</button>
+        <button type="button" data-view="stats"><span aria-hidden="true">▥</span> 활동 통계</button>
+        <button type="button" data-view="counselors"><span aria-hidden="true">⊕</span> 상담사 관리</button>
+      </nav>
+      <a class="portal-link" href="/">상담사 페이지 ↗</a>
+    </aside>
+    <main class="workspace">
+      <header class="top"><span>업무보고 <span aria-hidden="true">/</span> <strong id="breadcrumb">통합 보고서</strong></span>
+        <div><strong id="manager"></strong><button type="button" id="logout" class="outline">로그아웃</button></div>
+      </header>
+      <div class="content">
+        <div class="page-head">
+          <div><p class="eyebrow">WORK REPORT · ADMIN</p><h1 id="page-title">오늘의 통합 보고서</h1><p id="page-description" class="muted">전체 상담사의 방문 활동과 보고 내용을 한곳에서 확인하세요.</p></div>
+          <span id="today-label" class="date-badge"></span>
+        </div>
+        <form id="report-filters" class="panel filter-panel">
+          <label>시작일<input type="date" name="start" required></label>
+          <label>종료일<input type="date" name="end" required></label>
+          <label>상담사<select name="counselor"><option value="">전체 상담사</option></select></label>
+          <label>활동 구역<select name="area"><option value="">전체 구역</option></select></label>
+          <div class="filter-actions"><button type="button" id="reset-today" class="outline">오늘</button><button class="primary">조회</button></div>
+        </form>
+        <p id="report-status" class="status" role="status"></p>
+        <section id="metrics" class="metrics" aria-label="활동 집계"></section>
+        <section id="reports" class="panel" aria-labelledby="reports-title">
+          <header class="panel-head">
+            <div><h2 id="reports-title">통합 활동 내역</h2><p id="report-caption" class="muted"></p></div>
+            <div class="toolbar"><button type="button" id="export" class="outline">↓ 엑셀 다운로드</button><button type="button" id="print" class="outline">인쇄</button></div>
+          </header>
+          <div id="report-table" class="table-scroll"></div>
+          <div id="pager" class="pager" hidden><button type="button" id="prev" class="outline">이전</button><span id="page-number"></span><button type="button" id="next" class="outline">다음</button></div>
+        </section>
+        <section id="stats" class="stats" hidden aria-label="활동 통계">
+          <p id="stats-caption" class="muted"></p>
+          <div class="chart-grid">
+            <section class="panel" aria-labelledby="consent-chart-title">
+              <header class="panel-head"><div><h2 id="consent-chart-title">구역별 동의서 현황</h2><p class="muted">조회 기간에 새로 징구한 동의서 건수입니다.</p></div></header>
+              <div id="consent-chart"></div>
+            </section>
+            <section class="panel" aria-labelledby="activity-chart-title">
+              <header class="panel-head"><div><h2 id="activity-chart-title">활동일별 추이</h2><p class="muted">활동이 기록된 날짜별 방문과 단순 업데이트 건수입니다.</p></div></header>
+              <div id="activity-chart"></div>
+            </section>
+          </div>
+          <div class="panel"><header class="panel-head"><div><h2>상담사별 집계</h2><p class="muted">보고가 없는 상담사도 0건으로 표시합니다.</p></div></header><div id="stats-counselor" class="table-scroll"></div></div>
+          <div class="panel"><header class="panel-head"><h2>구역별 집계</h2></header><div id="stats-area" class="table-scroll"></div></div>
+          <div class="panel"><header class="panel-head"><h2>활동일별 집계</h2></header><div id="stats-day" class="table-scroll"></div></div>
+        </section>
+        <section id="counselors" class="counselors" hidden aria-label="상담사 관리">
+          <section class="panel area-panel" aria-labelledby="area-title">
+            <header class="panel-head"><div><h2 id="area-title">담당 구역 관리</h2><p class="muted">구역을 추가하면 상담사에게 배정할 수 있습니다. 삭제한 구역의 기존 보고서는 계속 조회할 수 있습니다.</p></div></header>
+            <div class="area-controls">
+              <form id="area-form"><label>구역 이름<input name="name" required maxlength="80" placeholder="예: 영화동 D구역"></label><button class="primary">구역 추가</button></form>
+              <p id="area-status" class="status" role="status"></p>
+              <ul id="area-list" class="area-list"></ul>
+            </div>
+          </section>
+          <div class="panel account-panel">
+            <h2>상담사 계정 만들기</h2>
+            <p class="muted">만든 계정으로 상담사 업무보고에 바로 로그인할 수 있습니다.</p>
+            <form id="create-form">
+              <label>상담사 이름<input name="name" autocomplete="off" required maxlength="80"></label>
+              <label>아이디<input name="username" autocomplete="off" required minlength="3" maxlength="48" pattern="[a-zA-Z0-9_.\-]{3,48}" aria-describedby="user-help"><small id="user-help">영문·숫자·밑줄·점·하이픈 3~48자</small></label>
+              <label>초기 비밀번호<input name="password" type="password" autocomplete="new-password" required minlength="5" maxlength="12"><small>5~12자</small></label>
+              <label>초기 비밀번호 확인<input name="confirm" type="password" autocomplete="new-password" required minlength="5" maxlength="12"></label>
+              <fieldset><legend>담당 구역</legend><div id="account-areas" class="check-options"></div></fieldset>
+              <button class="primary">상담사 생성</button>
+            </form>
+            <p id="account-status" class="status" role="status"></p>
+          </div>
+          <div class="panel">
+            <header class="panel-head"><div><h2>등록된 상담사</h2><p id="account-caption" class="muted"></p></div></header>
+            <div id="account-table" class="table-scroll"></div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+  <dialog id="detail"><div class="detail-head"><div><p class="eyebrow">ACTIVITY REPORT</p><h2>활동 보고 상세</h2></div><form method="dialog"><button class="outline">닫기</button></form></div><div id="detail-body"></div></dialog>
+  <dialog id="assignment-dialog" aria-labelledby="assignment-title">
+    <div class="detail-head"><h2 id="assignment-title">담당 구역 변경</h2><form method="dialog"><button class="outline">닫기</button></form></div>
+    <form id="assignment-form" class="assignment-form">
+      <p id="assignment-counselor"></p>
+      <div id="assignment-options" class="check-options" role="group" aria-label="배정할 구역"></div>
+      <p id="assignment-status" class="status" role="status"></p>
+      <button class="primary">배정 저장</button>
+    </form>
+  </dialog>
+</body>
+</html>

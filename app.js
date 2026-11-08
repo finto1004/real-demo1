@@ -31,6 +31,10 @@ async function api(path,body){
 }
 function startWorkspace(data){
  entries=data.entries;
+ allowedAreas=data.areaNames
+   ? Object.entries(data.areaNames).map(([id,name])=>({id,name}))
+   : demoAreas.filter(item=>data.areas?.includes(item.id));
+ renderAreaOptions();
  area=null;
  $('#user-name').textContent=data.name;
  $('#user-initial').textContent=Array.from(data.name)[0]||'';
@@ -48,7 +52,7 @@ function resetForm(){requestId=null;clearPreview();form.reset();form.elements.ar
 function syncType(){const simple=form.elements.type.value==='단순 업데이트';$('#visit-result').hidden=simple;form.querySelectorAll('[name=result]').forEach(el=>{el.required=!simple;if(simple)el.checked=false});syncOther()}
 function syncOther(){const resultOther=!$('#visit-result').hidden&&form.elements.result.value==='기타';const docOther=form.elements.other.checked;$('#result-other-field').hidden=!resultOther;$('#document-other-field').hidden=!docOther;form.elements.resultOther.required=resultOther;form.elements.otherDocument.required=docOther}
 function getGroup(id){return entries.filter(e=>e.targetId===id).sort((a,b)=>b.date.localeCompare(a.date)||b.createdAt-a.createdAt)}
-function selectArea(id){area=demoAreas.find(x=>x.id===id)||null;$('#search').value='';resetForm();render()}
+function selectArea(id){area=allowedAreas.find(x=>x.id===id)||null;$('#search').value='';resetForm();render()}
 function safeSave(){try{localStorage.setItem(storageKey,JSON.stringify(entries));return true}catch{return false}}
 function render(){
  const selectedTarget=$('#target-select').value;const targetList=area?[...new Set(entries.filter(x=>x.area===area.id).map(x=>x.targetId))].map(id=>getGroup(id)[0]):[];$('#target-select').innerHTML='<option value="">새 대상 작성</option>'+targetList.map(x=>'<option value="'+esc(x.targetId)+'">'+esc(x.address+' '+(x.unit||'')+' · '+x.owner)+'</option>').join('');$('#target-select').value=targetList.some(x=>x.targetId===selectedTarget)?selectedTarget:'';
@@ -93,7 +97,12 @@ $('#logout')?.addEventListener('click',async ()=>{
   entries=[];area=null;resetForm();render();show('login');
  }catch(error){alert(error.message)}
 });
-$('#area-select').innerHTML='<option value="">구역을 선택해 주세요</option>'+demoAreas.map(x=>'<option value="'+x.id+'">'+x.name+'</option>').join('');
+let allowedAreas=demoAreas;
+function renderAreaOptions(){
+ const placeholder=allowedAreas.length?'구역을 선택해 주세요':'배정된 구역이 없습니다';
+ $('#area-select').replaceChildren(new Option(placeholder,''),...allowedAreas.map(x=>new Option(x.name,x.id)));
+}
+renderAreaOptions();
 function openHistory(type='all'){$('#history-status').hidden=true;const day=type==='all'?'':nowDate();$('#history-start').value=day;$('#history-end').value=day;$('#search').value='';$('#date-error').hidden=true;historyFilter={start:day,end:day,query:'',type,area:type==='all'?null:(area?area.id:'__none__')};render();show('history-page')}
 document.querySelectorAll('.open-history').forEach(button=>button.addEventListener('click',()=>openHistory()));
 document.querySelectorAll('.summary-item').forEach(button=>button.addEventListener('click',()=>openHistory(button.dataset.stat)));
