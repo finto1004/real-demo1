@@ -1,6 +1,7 @@
 'use strict';
 
 const $ = selector => document.querySelector(selector);
+const isPreview = location.hostname === 'finto1004.github.io';
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
 }[char]));
@@ -275,6 +276,31 @@ function showDetails(entry) {
 }
 
 async function loadReport(params = {}) {
+  if (isPreview) {
+    const today = new Intl.DateTimeFormat('sv-SE', {timeZone: 'Asia/Seoul'}).format(new Date());
+    const filters = {start: today, end: today, counselor: '', area: '', ...params};
+    if (filters.start > filters.end) throw new Error('조회 시작일과 종료일을 확인해 주세요.');
+    const areas = {a: '영화동 A구역', b: '영화동 B구역', c: '영화동 C구역'};
+    const counselors = [{username: 'sample', name: '예시 상담사', areas: ['a', 'b', 'c']}];
+    const entries = ['a', 'a', 'b'].map((area, index) => ({
+      area, areaName: areas[area], date: today, createdAt: Date.now() - index * 60000,
+      username: 'sample', counselor: '예시 상담사', address: '예시 ' + (101 + index),
+      owner: '가상 주민', type: '최초 방문', result: '상담 완료', consent: index !== 1,
+      notes: [{text: '대시보드 확인용 샘플 보고입니다.', at: Date.now()}], changesItems: [], attachments: []
+    })).filter(entry => entry.date >= filters.start && entry.date <= filters.end &&
+      (!filters.area || filters.area === entry.area) && (!filters.counselor || filters.counselor === entry.username));
+    const counts = rows => ({total: rows.length, visits: rows.length, first: rows.length,
+      revisits: 0, updates: 0, consents: rows.filter(row => row.consent).length});
+    const metrics = counts(entries);
+    applyReport({today, filters, areas, activeAreas: areas, counselors, entries, metrics, name: '관리자 미리보기',
+      byArea: Object.entries(areas).filter(([id]) => !filters.area || filters.area === id)
+        .map(([id, name]) => ({name, ...counts(entries.filter(row => row.area === id))})),
+      byCounselor: [{...counselors[0], ...metrics}], byDay: entries.length ? [{name: today, ...metrics}] : []});
+    for (const element of document.querySelectorAll('#logout, #export, #area-form, #create-form, [data-delete-area], [data-assign]')) {
+      element.hidden = true;
+    }
+    return;
+  }
   const query = new URLSearchParams(params).toString();
   const response = await request('/api/admin/reports' + (query ? '?' + query : ''));
   applyReport(await response.json());
