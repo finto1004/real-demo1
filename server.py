@@ -32,7 +32,6 @@ ASSETS = {
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
     "/admin": ("admin.html", "text/html; charset=utf-8"),
-    "/admin/": ("admin.html", "text/html; charset=utf-8"),
     "/admin.html": ("admin.html", "text/html; charset=utf-8"),
     "/admin.js": ("admin.js", "text/javascript; charset=utf-8"),
     "/admin.css": ("admin.css", "text/css; charset=utf-8"),
@@ -225,6 +224,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         url = urlsplit(self.path)
         path = url.path
+        if path == "/admin/":
+            self.send_response(302)
+            self.send_header("Location", "/admin")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path in ASSETS:
             file, mime = ASSETS[path]
             self.send_content(200, mime, (ROOT / file).read_bytes())
