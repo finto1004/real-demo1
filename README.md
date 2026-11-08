@@ -26,6 +26,14 @@ python server.py serve
 첫 화면은 한국 시간 기준 오늘의 통합 보고서입니다. 기간·상담사·구역으로 조회하고,
 같은 조건의 통계와 활동 내역을 Excel(`.xlsx`)로 받거나 A4 가로로 인쇄할 수 있습니다.
 
-GitHub Pages는 정적 파일을 제공하므로 서비스 서버를 별도로 실행해야 합니다.
-외부 기기에서 사용하려면 운영 호스트에서 HTTPS 프록시를 구성하고
-`python server.py serve --secure-cookie`로 실행합니다.
+GitHub Pages는 정적 파일을 제공하므로 로그인과 보고서 저장에는 별도 Python 서버가 필요합니다.
+`db/initial.sqlite3`에는 업무보고를 시작할 때 사용할 구역 설정만 들어 있습니다.
+운영 호스트에 영구 저장소와 HTTPS 프록시를 설정하고, 아래 두 명령에 같은 DB 경로를 사용합니다.
+운영 관리자 계정은 첫 실행 때 별도로 생성합니다.
+
+```sh
+python server.py --db /var/data/work-report.sqlite3 --seed-db db/initial.sqlite3 add-admin site-admin "관리자 이름"
+python server.py --db /var/data/work-report.sqlite3 --seed-db db/initial.sqlite3 serve --host 0.0.0.0 --port "${PORT:-8766}" --secure-cookie
+```
+
+HTTPS 주소의 `/`는 업무보고, `/admin`은 관리자 페이지입니다.

@@ -46,7 +46,7 @@ def database(path):
         yield db
 
 
-def initialize(path):
+def initialize(path, seed_path=None):
     path.parent.mkdir(parents=True, exist_ok=True)
     with database(path) as db:
         db.executescript("""
@@ -80,7 +80,11 @@ def initialize(path):
         if "areas" not in columns:
             db.execute("ALTER TABLE users ADD COLUMN areas TEXT NOT NULL DEFAULT 'a,b,c'")
         if not db.execute("SELECT 1 FROM areas LIMIT 1").fetchone():
-            db.executemany("INSERT INTO areas(id, name) VALUES (?, ?)", DEFAULT_AREAS.items())
+            defaults = DEFAULT_AREAS
+            if seed_path is not None:
+                with closing(sqlite3.connect(seed_path.resolve().as_uri() + "?mode=ro", uri=True)) as seed:
+                    defaults = area_catalog(seed, active_only=True)
+            db.executemany("INSERT INTO areas(id, name) VALUES (?, ?)", defaults.items())
 
 
 def password_hash(password, salt):
@@ -435,9 +439,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(201, {"entries": entries})
 
 
-def make_server(path, port, secure_cookie=False):
-    initialize(path)
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+def make_server(path, port, secure_cookie=False, host="127.0.0.1", seed_path=None):
+    initialize(path, seed_path)
+    server = ThreadingHTTPServer((host, port), Handler)
     server.db_path = path
     server.secure_cookie = secure_cookie
     return server
@@ -446,6 +450,7 @@ def make_server(path, port, secure_cookie=False):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", type=Path, default=DATA_DIR / "work-report.sqlite3")
+    parser.add_argument("--seed-db", type=Path, help="Initial area catalog for a new database")
     commands = parser.add_subparsers(dest="command", required=True)
     for command in ("add-user", "add-admin"):
         create = commands.add_parser(command)
@@ -453,10 +458,11 @@ def main():
         create.add_argument("name")
     run = commands.add_parser("serve")
     run.add_argument("--port", type=int, default=8766)
+    run.add_argument("--host", default="127.0.0.1")
     run.add_argument("--secure-cookie", action="store_true")
     args = parser.parse_args()
     if args.command in ("add-user", "add-admin"):
-        initialize(args.db)
+        initialize(args.db, args.seed_db)
         role = "admin" if args.command == "add-admin" else "counselor"
         password = getpass.getpass("비밀번호: ")
         if password != getpass.getpass("비밀번호 확인: "):
@@ -467,8 +473,8 @@ def main():
             parser.error(str(exc))
         print(("관리자" if role == "admin" else "상담사") + " 계정을 만들었습니다.")
         return
-    with make_server(args.db, args.port, args.secure_cookie) as server:
-        print(f"http://127.0.0.1:{args.port}/", flush=True)
+    with make_server(args.db, args.port, args.secure_cookie, args.host, args.seed_db) as server:
+        print(f"Listening on {args.host}:{server.server_port}", flush=True)
         server.serve_forever()
 
 
