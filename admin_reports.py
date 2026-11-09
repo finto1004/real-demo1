@@ -37,13 +37,15 @@ def report_data(db, query, today):
         raise ValueError("조회 시작일과 종료일을 확인해 주세요.") from exc
     areas = area_catalog(db)
     active_areas = area_catalog(db, active_only=True)
+    households = dict(db.execute("SELECT id, households FROM areas"))
     if area and area not in areas:
         raise ValueError("활동 구역을 확인해 주세요.")
     if counselor and not re.fullmatch(r"[a-zA-Z0-9_.-]{3,48}", counselor):
         raise ValueError("상담사 아이디를 확인해 주세요.")
-    users = [dict(username=username, name=name, areas=[key for key in assigned.split(",") if key in active_areas])
-             for username, name, assigned in db.execute(
-        "SELECT username, name, areas FROM users WHERE role='counselor' ORDER BY name, username")]
+    users = [dict(username=username, name=name, phone=phone, active=bool(active),
+                  areas=[key for key in assigned.split(",") if key in active_areas])
+             for username, name, phone, active, assigned in db.execute(
+        "SELECT username, name, phone, active, areas FROM users WHERE role='counselor' ORDER BY name, username")]
     rows = db.execute("""
         SELECT e.body, e.username, u.name, e.request_id FROM entries e JOIN users u USING(username)
         WHERE json_extract(e.body, '$.date') BETWEEN ? AND ?
@@ -62,10 +64,11 @@ def report_data(db, query, today):
         by_area[entry["area"]].append(entry)
         by_day[entry["date"]].append(entry)
     return dict(today=today, filters=dict(start=start, end=end, counselor=counselor, area=area),
-                counselors=users, areas=areas, activeAreas=active_areas, entries=entries, metrics=count_entries(entries),
+                counselors=users, areas=areas, activeAreas=active_areas, households=households,
+                entries=entries, metrics=count_entries(entries),
                 byCounselor=[dict(**user, **count_entries(by_counselor[user["username"]]))
                              for user in users if not counselor or counselor == user["username"]],
-                byArea=[dict(name=name, archived=key not in active_areas, **count_entries(by_area[key]))
+                byArea=[dict(id=key, name=name, archived=key not in active_areas, **count_entries(by_area[key]))
                         for key, name in areas.items()
                         if (area == key) or (not area and (key in active_areas or key in by_area))],
                 byDay=[dict(name=day, **count_entries(group)) for day, group in by_day.items()])

@@ -98,8 +98,17 @@ td small { display:block }
 .area-panel { grid-column:1/-1 }
 .area-controls { padding:0 1.2rem 1.2rem }
 .area-controls form { display:flex; gap:.55rem; align-items:end }
+.area-controls form { flex-wrap:wrap }
 .area-controls form label { flex:0 1 22rem }
 .area-controls form button { flex:none }
+.outcome-grid { display:grid; gap:1rem; padding:0 1rem 1rem }
+.outcome-card { padding:1rem; border:1px solid var(--border); border-radius:.8rem; min-width:0 }
+.outcome-card h3 { margin:0 0 .8rem; overflow-wrap:anywhere }
+.outcome-pie { width:min(9rem,100%); aspect-ratio:1; display:grid; place-items:center; margin:0 auto .8rem; border-radius:50% }
+.outcome-pie span { width:70%; aspect-ratio:1; border-radius:50%; background:white; display:grid; place-items:center; font-size:.8rem; font-weight:750 }
+.outcome-legend { padding:0; margin:0; list-style:none; display:grid; gap:.3rem }
+.outcome-legend li { display:grid; grid-template-columns:.65rem 1fr auto; align-items:center; gap:.5rem }
+.outcome-dot { width:.65rem; height:.65rem; border-radius:50% }
 .area-list { display:flex; flex-wrap:wrap; gap:.55rem; list-style:none; padding:0; margin:.85rem 0 0 }
 .area-list li { display:flex; gap:.5rem; align-items:center; max-width:100%; background:var(--bg); padding:.25rem .35rem .25rem .65rem; border-radius:.55rem }
 .area-list li span { overflow-wrap:anywhere }

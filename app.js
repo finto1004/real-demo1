@@ -187,7 +187,12 @@ form.addEventListener('submit',async e=>{e.preventDefault();if(saving)return;if(
 }
 clearPreview();resetForm();const day=entry.date;$('#history-start').value=day;$('#history-end').value=day;$('#search').value='';$('#date-error').hidden=true;historyFilter={start:day,end:day,query:'',type:'all',area:null};$('#history-status').textContent='활동 기록을 저장했습니다. 오늘의 활동 이력을 확인해 주세요.';$('#history-status').hidden=false;render();show('history-page')});
 if(isDemo){
- area=demoAreas[0];resetForm();render();show('workspace');
+ try {
+   const settings=JSON.parse(localStorage.getItem('work-report-admin-preview-v1'));
+   if(settings?.activeAreas) allowedAreas=Object.entries(settings.activeAreas).map(([id,name])=>({id,name}));
+ } catch {}
+ renderAreaOptions();
+ area=allowedAreas[0]||null;resetForm();render();show('workspace');
 }else{
  resetForm();render();show('login');
  api('entries').then(startWorkspace).catch(error=>{

@@ -2,6 +2,13 @@
 
 const $ = selector => document.querySelector(selector);
 const isPreview = location.hostname === 'finto1004.github.io';
+const previewSettingsKey = 'work-report-admin-preview-v1';
+const previewDefaults = {
+  areas: {a: '영화동 A구역', b: '영화동 B구역', c: '영화동 C구역'},
+  activeAreas: {a: '영화동 A구역', b: '영화동 B구역', c: '영화동 C구역'},
+  households: {a: 20, b: 12, c: 16},
+  counselors: [{username: 'sample', name: '예시 상담사', phone: '', areas: ['a', 'b', 'c']}]
+};
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
 }[char]));
@@ -20,13 +27,14 @@ const metricLabels = [
 const views = {
   reports: ['통합 보고서', '전체 상담사의 방문 활동과 보고 내용을 한곳에서 확인하세요.'],
   stats: ['활동 통계', '조회 조건에 맞는 상담사별·구역별·활동일별 실적을 비교하세요.'],
-  counselors: ['상담사 관리', '업무보고를 작성할 상담사의 계정을 만들고 확인하세요.']
+  counselors: ['설정', '담당 구역과 상담사 계정을 관리하세요.']
 };
 const pageSize = 25;
 let report = null;
 let activeView = 'reports';
 let page = 0;
 let editingCounselor = '';
+let editingArea = '';
 let areaChangePending = false;
 
 function status(id, message = '', error = false) {
@@ -36,6 +44,9 @@ function status(id, message = '', error = false) {
 }
 
 async function request(url, data) {
+  if (isPreview && data && (url.startsWith('/api/admin/areas') || url.startsWith('/api/admin/counselors'))) {
+    return updatePreviewSettings(url, data);
+  }
   const response = await fetch(url, data === undefined ? {} : {
     method: 'POST',
     headers: {'Content-Type': 'application/json', 'X-Work-Report': '1'},
@@ -50,6 +61,46 @@ async function request(url, data) {
   return response;
 }
 
+function previewSettings() {
+  return JSON.parse(localStorage.getItem(previewSettingsKey)) || structuredClone(previewDefaults);
+}
+
+function updatePreviewSettings(path, data) {
+  const settings = previewSettings();
+  const {areas, activeAreas, households, counselors} = settings;
+  if (path.startsWith('/api/admin/areas')) {
+    if (path.endsWith('/delete')) {
+      delete activeAreas[data.id];
+      for (const counselor of counselors) counselor.areas = counselor.areas.filter(id => id !== data.id);
+    } else {
+      const id = data.id || crypto.randomUUID().replaceAll('-', '').slice(0, 16);
+      const name = data.name.replace(/\s+/g, ' ').trim();
+      if (!name) throw new Error('구역 이름을 입력해 주세요.');
+      if (Object.entries(activeAreas).some(([key, label]) => key !== id && label.toLowerCase() === name.toLowerCase())) {
+        throw new Error('이미 사용 중인 구역 이름입니다.');
+      }
+      areas[id] = activeAreas[id] = name;
+      households[id] = data.households;
+    }
+  } else {
+    const index = counselors.findIndex(user => user.username === data.original);
+    if (path.endsWith('/delete')) {
+      if (index >= 0) counselors.splice(index, 1);
+    } else {
+      const name = data.name.trim();
+      if (!name) throw new Error('상담사 이름을 입력해 주세요.');
+      if (counselors.some((user, i) => i !== index && user.username === data.username)) {
+        throw new Error('이미 사용 중인 아이디입니다.');
+      }
+      const user = {username: data.username, name, phone: data.phone.trim(), areas: data.areas};
+      if (index >= 0) counselors[index] = user;
+      else counselors.push(user);
+    }
+  }
+  localStorage.setItem(previewSettingsKey, JSON.stringify(settings));
+  return new Response(JSON.stringify({name: data.name, username: data.username}), {status: 200});
+}
+
 function showLogin(message = '') {
   report = null;
   if ($('#detail').open) $('#detail').close();
@@ -62,7 +113,7 @@ function showLogin(message = '') {
     $(id).replaceChildren();
   }
   $('#create-form').reset();
-  $('#area-form').reset();
+  resetAreaForm();
   restoreLoginForm();
   status('#account-status');
   status('#area-status');
@@ -169,18 +220,49 @@ function renderStats(selector, heading, list) {
 }
 
 function renderCharts(data) {
-  const consentMax = data.byArea.reduce((max, row) => Math.max(max, row.consents), 1);
   const dayMax = data.byDay.reduce((max, row) => Math.max(max, row.visits + row.updates), 1);
   const bar = (value, max, kind = '') => '<span class="chart-bar ' + kind +
     '" style="width:' + (value / max * 100) + '%"></span>';
   const chartRow = (label, value, bars) => '<li><span class="chart-label">' + esc(label) +
     '</span><span class="chart-value">' + esc(value) +
     '</span><div class="chart-track" aria-hidden="true">' + bars + '</div></li>';
-  const areas = [...data.byArea].sort((a, b) => b.consents - a.consents);
-  $('#consent-chart').innerHTML = areas.length
-    ? '<ul class="chart-list">' + areas.map(row => chartRow(
-      row.name + (row.archived ? ' (삭제됨)' : ''), row.consents + '건',
-      bar(row.consents, consentMax))).join('') + '</ul>'
+  const outcomes = [
+    ['동의', '#21835b'], ['상담 완료', '#4277b5'], ['부재', '#b78120'],
+    ['방문 거절', '#b44b50'], ['기타', '#795db2']
+  ];
+  const byArea = new Map();
+  for (const entry of data.entries) {
+    if (entry.type === '단순 업데이트' || !outcomes.some(([label]) => label === entry.result)) continue;
+    if (!byArea.has(entry.area)) byArea.set(entry.area, new Map());
+    const latest = byArea.get(entry.area);
+    const household = JSON.stringify([entry.address.replace(/\s+/g, '').toLowerCase(),
+      (entry.unit || '').replace(/\s+/g, '').toLowerCase()]);
+    if (!latest.has(household)) latest.set(household, entry.result);
+  }
+  const percent = new Intl.NumberFormat('ko-KR', {style: 'percent', maximumFractionDigits: 1});
+  const pie = row => {
+    const results = [...(byArea.get(row.id)?.values() || [])];
+    const total = data.households[row.id];
+    const valid = total > 0 && results.length <= total;
+    const slices = outcomes.map(([label, color]) => [label, color, results.filter(result => result === label).length]);
+    if (valid) slices.push(['미방문', '#dbe2e8', total - results.length]);
+    let offset = 0;
+    const gradient = valid ? slices.filter(([, , count]) => count > 0).map(([, color, count]) => {
+      const start = offset;
+      offset += count;
+      return color + ' ' + (start / total * 100) + '% ' + (offset / total * 100) + '%';
+    }).join(', ') : '';
+    const chart = valid ? '<div class="outcome-pie" aria-hidden="true" style="background:conic-gradient(' +
+      gradient + ')"><span>' + total.toLocaleString('ko-KR') + '세대</span></div>'
+      : '<p class="muted">' + (total ? '기록된 세대 수가 총세대 수를 초과했습니다.' : '설정에서 총세대 수를 입력해 주세요.') + '</p>';
+    return '<section class="outcome-card"><h3>' + esc(row.name) + (row.archived ? ' (삭제됨)' : '') +
+      '</h3>' + chart + '<ul class="outcome-legend">' + slices.map(([label, color, count]) =>
+        '<li><span class="outcome-dot" style="background:' + color + '"></span><span>' + label +
+        '</span><strong>' + (valid ? percent.format(count / total) : count + '세대') + '</strong></li>').join('') +
+      '</ul></section>';
+  };
+  $('#consent-chart').innerHTML = data.byArea.length
+    ? '<div class="outcome-grid">' + data.byArea.map(pie).join('') + '</div>'
     : empty('조회할 구역이 없습니다.');
   const days = [...data.byDay].reverse();
   $('#activity-chart').innerHTML = days.length
@@ -202,15 +284,20 @@ function renderAreaManagement(data) {
   const selected = new Set(Object.keys(data.activeAreas).filter(key => !unchecked.has(key)));
   areaFields.innerHTML = areaCheckboxes(data.activeAreas, selected);
   $('#area-list').innerHTML = Object.entries(data.activeAreas).map(([key, name]) =>
-    '<li><span>' + esc(name) + '</span><button type="button" class="outline" data-delete-area="' + esc(key) +
+    '<li><span>' + esc(name) + ' · ' + (data.households[key] ? data.households[key].toLocaleString('ko-KR') + '세대' : '총세대 수 미설정') +
+    '</span><button type="button" class="outline" data-edit-area="' + esc(key) + '">수정</button>' +
+    '<button type="button" class="outline" data-delete-area="' + esc(key) +
     '" aria-label="' + esc(name) + ' 삭제">삭제</button></li>').join('')
     || '<li>사용 중인 구역이 없습니다.</li>';
-  const users = data.counselors.map(user => '<tr><th scope="row">' + esc(user.name) + '</th><td>' +
-    esc(user.username) + '</td><td>' + esc(user.areas.map(key => data.activeAreas[key]).join(', ') || '미배정') +
+  const active = data.counselors.filter(user => user.active !== false);
+  const users = active.map(user => '<tr><th scope="row">' + esc(user.name) + '</th><td>' +
+    esc(user.username) + '</td><td>' + dash(user.phone) + '</td><td>' + esc(user.areas.map(key => data.activeAreas[key]).join(', ') || '미배정') +
     '</td><td><button type="button" class="outline assignment-button" data-assign="' + esc(user.username) +
-    '" aria-label="' + esc(user.name) + ' 담당 구역 변경">변경</button></td></tr>').join('');
-  $('#account-caption').textContent = '총 ' + data.counselors.length + '명';
-  showTable($('#account-table'), users ? table(['이름', '아이디', '담당 구역', '배정'], users)
+    '" aria-label="' + esc(user.name) + ' 수정">수정</button> ' +
+    '<button type="button" class="outline" data-delete-counselor="' + esc(user.username) +
+    '" aria-label="' + esc(user.name) + ' 삭제">삭제</button></td></tr>').join('');
+  $('#account-caption').textContent = '총 ' + active.length + '명';
+  showTable($('#account-table'), users ? table(['이름', '아이디', '연락처', '담당 구역', '관리'], users)
     : empty('등록된 상담사가 없습니다.'), '상담사 계정 목록');
 }
 
@@ -280,25 +367,37 @@ async function loadReport(params = {}) {
     const today = new Intl.DateTimeFormat('sv-SE', {timeZone: 'Asia/Seoul'}).format(new Date());
     const filters = {start: today, end: today, counselor: '', area: '', ...params};
     if (filters.start > filters.end) throw new Error('조회 시작일과 종료일을 확인해 주세요.');
-    const areas = {a: '영화동 A구역', b: '영화동 B구역', c: '영화동 C구역'};
-    const counselors = [{username: 'sample', name: '예시 상담사', areas: ['a', 'b', 'c']}];
-    const entries = ['a', 'a', 'b'].map((area, index) => ({
+    const {areas, activeAreas, households, counselors} = previewSettings();
+    const examples = ['동의', '상담 완료', '부재', '방문 거절', '기타'].map((result, index) => ({
+      area: index < 3 ? 'a' : 'b', result, index
+    })).map(({area, result, index}) => ({
       area, areaName: areas[area], date: today, createdAt: Date.now() - index * 60000,
       username: 'sample', counselor: '예시 상담사', address: '예시 ' + (101 + index),
-      owner: '가상 주민', type: '최초 방문', result: '상담 완료', consent: index !== 1,
+      owner: '가상 주민', type: '최초 방문', result, consent: result === '동의',
       notes: [{text: '대시보드 확인용 샘플 보고입니다.', at: Date.now()}], changesItems: [], attachments: []
-    })).filter(entry => entry.date >= filters.start && entry.date <= filters.end &&
-      (!filters.area || filters.area === entry.area) && (!filters.counselor || filters.counselor === entry.username));
-    const counts = rows => ({total: rows.length, visits: rows.length, first: rows.length,
-      revisits: 0, updates: 0, consents: rows.filter(row => row.consent).length});
+    }));
+    const saved = (JSON.parse(localStorage.getItem('work-report-sample-v1')) || [])
+      .filter(entry => !entry.targetId?.startsWith('sample-'))
+      .map(entry => ({...entry, username: 'demo', counselor: '업무보고 데모',
+        areaName: areas[entry.area] || entry.area, attachments: []}));
+    const entries = [...saved, ...examples].filter(entry => entry.date >= filters.start && entry.date <= filters.end &&
+      (!filters.area || filters.area === entry.area) && (!filters.counselor || filters.counselor === entry.username))
+      .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
+    const counts = rows => ({total: rows.length, visits: rows.filter(row => row.type !== '단순 업데이트').length,
+      first: rows.filter(row => row.type === '최초 방문').length, revisits: rows.filter(row => row.type === '재방문').length,
+      updates: rows.filter(row => row.type === '단순 업데이트').length,
+      consents: rows.filter(row => row.consent && !row.previousConsent).length});
     const metrics = counts(entries);
-    applyReport({today, filters, areas, activeAreas: areas, counselors, entries, metrics, name: '관리자 미리보기',
-      byArea: Object.entries(areas).filter(([id]) => !filters.area || filters.area === id)
-        .map(([id, name]) => ({name, ...counts(entries.filter(row => row.area === id))})),
-      byCounselor: [{...counselors[0], ...metrics}], byDay: entries.length ? [{name: today, ...metrics}] : []});
-    for (const element of document.querySelectorAll('#logout, #export, #area-form, #create-form, [data-delete-area], [data-assign]')) {
-      element.hidden = true;
+    const demoCounselors = [...counselors];
+    for (const {username, counselor: name} of [...examples, ...saved]) {
+      if (!demoCounselors.some(user => user.username === username)) demoCounselors.push({username, name, active: false, areas: []});
     }
+    applyReport({today, filters, areas, activeAreas, households, counselors: demoCounselors, entries, metrics, name: '관리자 미리보기',
+      byArea: Object.entries(areas).filter(([id]) => filters.area ? filters.area === id : id in activeAreas || entries.some(row => row.area === id))
+        .map(([id, name]) => ({id, name, archived: !(id in activeAreas), ...counts(entries.filter(row => row.area === id))})),
+      byCounselor: demoCounselors.filter(user => !filters.counselor || user.username === filters.counselor)
+        .map(user => ({...user, ...counts(entries.filter(row => row.username === user.username))})),
+      byDay: [...new Set(entries.map(entry => entry.date))].map(day => ({name: day, ...counts(entries.filter(row => row.date === day))}))});
     return;
   }
   const query = new URLSearchParams(params).toString();
@@ -460,30 +559,66 @@ $('#area-form').addEventListener('submit', event => {
   event.preventDefault();
   const form = event.currentTarget;
   const name = form.elements.name.value.trim();
-  changeAreas('/api/admin/areas', {name}, form.querySelector('button'), '#area-status', () => {
-    form.reset();
-    status('#area-status', '“' + name + '”을 추가했습니다.');
+  const editing = Boolean(editingArea);
+  const households = form.elements.households.valueAsNumber;
+  changeAreas(editing ? '/api/admin/areas/update' : '/api/admin/areas',
+    {id: editingArea, name, households}, $('#save-area'), '#area-status', () => {
+    resetAreaForm();
+    status('#area-status', '“' + name + '”을 ' + (editing ? '수정했습니다.' : '추가했습니다.'));
   });
 });
 
+function resetAreaForm() {
+  editingArea = '';
+  $('#area-form').reset();
+  $('#save-area').textContent = '구역 추가';
+  $('#cancel-area-edit').hidden = true;
+}
+
+$('#cancel-area-edit').addEventListener('click', resetAreaForm);
+
 $('#area-list').addEventListener('click', event => {
+  const edit = event.target.closest('[data-edit-area]');
+  if (edit && report && !areaChangePending) {
+    editingArea = edit.dataset.editArea;
+    const fields = $('#area-form').elements;
+    fields.name.value = report.activeAreas[editingArea];
+    fields.households.value = report.households[editingArea] ?? '';
+    $('#save-area').textContent = '수정 저장';
+    $('#cancel-area-edit').hidden = false;
+    fields.name.focus();
+    return;
+  }
   const button = event.target.closest('[data-delete-area]');
   if (!button || areaChangePending || !report) return;
   const id = button.dataset.deleteArea;
   const name = report.activeAreas[id];
   if (!window.confirm('“' + name + '”을 삭제할까요? 상담사 배정에서 제거되고 기존 보고서는 유지됩니다.')) return;
   changeAreas('/api/admin/areas/delete', {id}, button, '#area-status', () => {
+    if (editingArea === id) resetAreaForm();
     status('#area-status', '“' + name + '”을 삭제했습니다.');
   });
 });
 
 $('#account-table').addEventListener('click', event => {
+  const remove = event.target.closest('[data-delete-counselor]');
+  if (remove && report && !areaChangePending) {
+    const original = remove.dataset.deleteCounselor;
+    if (window.confirm('상담사 계정을 삭제할까요? 로그인은 차단되고 기존 보고서는 유지됩니다.')) {
+      changeAreas('/api/admin/counselors/delete', {original}, remove, '#account-status',
+        () => status('#account-status', '상담사 계정을 삭제했습니다.'));
+    }
+    return;
+  }
   const button = event.target.closest('[data-assign]');
   if (!button || areaChangePending || !report) return;
   const counselor = report.counselors.find(user => user.username === button.dataset.assign);
   if (!counselor) return;
   editingCounselor = counselor.username;
-  $('#assignment-counselor').textContent = counselor.name + ' (' + counselor.username + ')';
+  const fields = $('#assignment-form').elements;
+  fields.username.value = counselor.username;
+  fields.name.value = counselor.name;
+  fields.phone.value = counselor.phone || '';
   $('#assignment-options').innerHTML = areaCheckboxes(report.activeAreas, new Set(counselor.areas));
   status('#assignment-status');
   $('#assignment-dialog').showModal();
@@ -492,11 +627,12 @@ $('#account-table').addEventListener('click', event => {
 $('#assignment-form').addEventListener('submit', event => {
   event.preventDefault();
   const form = event.currentTarget;
-  const areas = new FormData(form).getAll('areas');
-  changeAreas('/api/admin/counselors/areas', {username: editingCounselor, areas}, form.querySelector('button'),
+  const fields = new FormData(form);
+  const {username, name, phone} = Object.fromEntries(fields);
+  changeAreas('/api/admin/counselors/update', {original: editingCounselor, username, name, phone, areas: fields.getAll('areas')}, form.querySelector('button'),
     '#assignment-status', () => {
       $('#assignment-dialog').close();
-      status('#account-status', '상담사의 담당 구역을 변경했습니다.');
+      status('#account-status', '상담사 정보를 수정했습니다.');
     });
 });
 
@@ -504,7 +640,7 @@ $('#create-form').addEventListener('submit', async event => {
   event.preventDefault();
   const form = event.currentTarget;
   const fields = new FormData(form);
-  const {name, username, password, confirm} = Object.fromEntries(fields);
+  const {name, username, phone, password, confirm} = Object.fromEntries(fields);
   const areas = fields.getAll('areas');
   if (password !== confirm) {
     status('#account-status', '비밀번호와 비밀번호 확인이 일치하지 않습니다.', true);
@@ -519,7 +655,7 @@ $('#create-form').addEventListener('submit', async event => {
   $('#logout').disabled = true;
   status('#account-status', '상담사 계정을 만드는 중…');
   try {
-    const response = await request('/api/admin/counselors', {name, username, password, areas});
+    const response = await request('/api/admin/counselors', {name, username, phone, password, areas});
     const user = await response.json();
     form.reset();
     try {
@@ -538,6 +674,19 @@ $('#create-form').addEventListener('submit', async event => {
 });
 
 restoreLoginForm();
+if (isPreview) {
+  $('#logout').hidden = true;
+  $('#export').hidden = true;
+  $('#account-hint').textContent = '미리보기의 설정과 업무보고는 같은 브라우저에 저장됩니다. 가상 연락처만 입력해 주세요.';
+  for (const field of $('#create-form').querySelectorAll('input[type=password]')) {
+    field.disabled = true;
+    field.closest('label').hidden = true;
+  }
+  for (const link of document.querySelectorAll('.portal-link, #login-view a')) link.href = './demo.html';
+  window.addEventListener('storage', event => {
+    if (event.key === 'work-report-sample-v1' && report) loadReport(report.filters).catch(error => status('#report-status', error.message, true));
+  });
+}
 const initialLogin = loginForm.querySelector('button');
 initialLogin.disabled = true;
 loadReport().catch(error => {

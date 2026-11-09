@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "work-report"
 KST = timezone(timedelta(hours=9))
 TYPES = {"최초 방문", "재방문", "단순 업데이트"}
-RESULTS = {"상담 완료", "부재", "방문 거절", "기타"}
+RESULTS = {"동의", "상담 완료", "부재", "방문 거절", "기타"}
 ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/index.html": ("index.html", "text/html; charset=utf-8"),
@@ -78,6 +78,12 @@ def initialize(path, seed_path=None):
                        "CHECK(role IN ('counselor','admin'))")
         if "areas" not in columns:
             db.execute("ALTER TABLE users ADD COLUMN areas TEXT NOT NULL DEFAULT 'a,b,c'")
+        if "phone" not in columns:
+            db.execute("ALTER TABLE users ADD COLUMN phone TEXT NOT NULL DEFAULT ''")
+        if "active" not in columns:
+            db.execute("ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+        if "households" not in {row[1] for row in db.execute("PRAGMA table_info(areas)")}:
+            db.execute("ALTER TABLE areas ADD COLUMN households INTEGER CHECK(households BETWEEN 1 AND 10000000)")
         if not db.execute("SELECT 1 FROM areas LIMIT 1").fetchone():
             defaults = DEFAULT_AREAS
             if seed_path is not None:
@@ -104,7 +110,7 @@ def assigned_areas(db, stored):
     return {key: active[key] for key in stored.split(",") if key in active}
 
 
-def add_user(path, username, name, password, role="counselor", areas=None):
+def add_user(path, username, name, password, role="counselor", areas=None, phone=""):
     if not re.fullmatch(r"[a-zA-Z0-9_.-]{3,48}", username) or not 1 <= len(name.strip()) <= 80:
         raise ValueError("아이디는 영문·숫자·밑줄·점·하이픈 3~48자, 이름은 1~80자로 입력해 주세요.")
     if not 5 <= len(password) <= 12:
@@ -116,8 +122,8 @@ def add_user(path, username, name, password, role="counselor", areas=None):
         if areas is None:
             areas = list(area_catalog(db, active_only=True)) if role == "counselor" else []
         assigned = checked_areas(db, areas, required=role == "counselor")
-        db.execute("INSERT INTO users(username, name, salt, password, role, areas) VALUES (?, ?, ?, ?, ?, ?)",
-                   (username, name.strip(), salt, hashed, role, assigned))
+        db.execute("INSERT INTO users(username, name, salt, password, role, areas, phone) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                   (username, name.strip(), salt, hashed, role, assigned, phone))
 
 
 def read_field(data, key, limit=200, required=False):
@@ -217,7 +223,7 @@ class Handler(BaseHTTPRequestHandler):
     def current_user(self, db):
         return db.execute(
             """SELECT u.username, u.name, u.role, u.areas FROM sessions s JOIN users u USING(username)
-               WHERE s.token=? AND s.expires>?""",
+               WHERE s.token=? AND s.expires>? AND u.active=1""",
             (self.session_hash(), int(time.time())),
         ).fetchone()
 
@@ -337,12 +343,15 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(password, str):
                     raise ValueError("비밀번호를 확인해 주세요.")
                 try:
-                    add_user(self.server.db_path, username, name, password, areas=data.get("areas", []))
+                    add_user(self.server.db_path, username, name, password, areas=data.get("areas", []),
+                             phone=read_field(data, "phone", 40))
                 except sqlite3.IntegrityError:
                     self.send_json(409, {"error": "이미 사용 중인 아이디입니다."})
                     return
                 self.send_json(201, {"username": username, "name": name})
-            elif path in ("/api/admin/areas", "/api/admin/areas/delete", "/api/admin/counselors/areas"):
+            elif path in ("/api/admin/counselors/update", "/api/admin/counselors/delete"):
+                self.change_counselor(path, data)
+            elif path in ("/api/admin/areas", "/api/admin/areas/update", "/api/admin/areas/delete", "/api/admin/counselors/areas"):
                 self.change_areas(path, data)
             else:
                 self.send_json(404, {"error": "페이지를 찾을 수 없습니다."})
@@ -351,19 +360,65 @@ class Handler(BaseHTTPRequestHandler):
         except sqlite3.Error:
             self.send_json(503, {"error": "저장소에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요."})
 
+    def change_counselor(self, path, data):
+        original = read_field(data, "original", 48, True)
+        with database(self.server.db_path) as db:
+            db.execute("BEGIN IMMEDIATE")
+            if not self.require_admin(db):
+                return
+            user = db.execute("SELECT salt, password FROM users WHERE username=? AND role='counselor' AND active=1",
+                              (original,)).fetchone()
+            if not user:
+                self.send_json(404, {"error": "등록된 상담사 계정을 찾을 수 없습니다."})
+                return
+            if path.endswith("/delete"):
+                db.execute("UPDATE users SET active=0, areas='' WHERE username=?", (original,))
+                db.execute("DELETE FROM sessions WHERE username=?", (original,))
+            else:
+                username = read_field(data, "username", 48, True)
+                if not re.fullmatch(r"[a-zA-Z0-9_.-]{3,48}", username):
+                    raise ValueError("아이디는 영문·숫자·밑줄·점·하이픈 3~48자로 입력해 주세요.")
+                name = read_field(data, "name", 80, True)
+                phone = read_field(data, "phone", 40)
+                areas = checked_areas(db, data.get("areas"))
+                if username == original:
+                    db.execute("UPDATE users SET name=?, phone=?, areas=? WHERE username=?",
+                               (name, phone, areas, original))
+                else:
+                    if db.execute("SELECT 1 FROM users WHERE username=?", (username,)).fetchone():
+                        self.send_json(409, {"error": "이미 사용 중인 아이디입니다."})
+                        return
+                    db.execute("INSERT INTO users(username, name, salt, password, role, areas, phone) "
+                               "VALUES (?, ?, ?, ?, 'counselor', ?, ?)", (username, name, *user, areas, phone))
+                    db.execute("UPDATE entries SET username=? WHERE username=?", (username, original))
+                    db.execute("DELETE FROM sessions WHERE username=?", (original,))
+                    db.execute("DELETE FROM users WHERE username=?", (original,))
+        self.send_json(200, {})
+
     def change_areas(self, path, data):
         with database(self.server.db_path) as db:
             db.execute("BEGIN IMMEDIATE")
             if not self.require_admin(db):
                 return
-            if path == "/api/admin/areas":
+            if path in ("/api/admin/areas", "/api/admin/areas/update"):
                 name = " ".join(read_field(data, "name", 80, True).split())
-                if db.execute("SELECT 1 FROM areas WHERE active=1 AND name=? COLLATE NOCASE", (name,)).fetchone():
+                households = data.get("households")
+                if type(households) is not int or not 1 <= households <= 10_000_000:
+                    raise ValueError("총세대 수는 1~10,000,000 사이의 정수로 입력해 주세요.")
+                editing = path.endswith("/update")
+                key = read_field(data, "id", 16, True) if editing else secrets.token_hex(8)
+                if db.execute("SELECT 1 FROM areas WHERE active=1 AND name=? COLLATE NOCASE AND id<>?",
+                              (name, key)).fetchone():
                     self.send_json(409, {"error": "이미 사용 중인 구역 이름입니다."})
                     return
-                key = secrets.token_hex(8)
-                db.execute("INSERT INTO areas(id, name) VALUES (?, ?)", (key, name))
-                result = (201, {"id": key, "name": name})
+                if editing:
+                    if not db.execute("UPDATE areas SET name=?, households=? WHERE id=? AND active=1",
+                                      (name, households, key)).rowcount:
+                        self.send_json(404, {"error": "사용 중인 구역을 찾을 수 없습니다."})
+                        return
+                else:
+                    db.execute("INSERT INTO areas(id, name, households) VALUES (?, ?, ?)", (key, name, households))
+                result = (200 if editing else 201, {"id": key, "name": name})
             elif path == "/api/admin/areas/delete":
                 key = read_field(data, "id", 16, True)
                 if not db.execute("UPDATE areas SET active=0 WHERE id=? AND active=1", (key,)).rowcount:
@@ -392,7 +447,7 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(password, str) or not 5 <= len(password) <= 12:
             raise ValueError("비밀번호는 5~12자로 입력해 주세요.")
         with database(self.server.db_path) as db:
-            user = db.execute("SELECT name, salt, password, role, areas FROM users WHERE username=?",
+            user = db.execute("SELECT name, salt, password, role, areas FROM users WHERE username=? AND active=1",
                               (username,)).fetchone()
             expected = user[2] if user else bytes(64)
             salt = user[1] if user else bytes(16)
